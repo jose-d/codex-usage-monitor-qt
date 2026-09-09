@@ -14,6 +14,7 @@ CODEX_HOME = Path.home() / ".codex"
 LOG_DB = CODEX_HOME / "logs_2.sqlite"
 STATE_DB = CODEX_HOME / "state_5.sqlite"
 SESSIONS_DIR = CODEX_HOME / "sessions"
+FIVE_HOUR_MINUTES = 5 * 60
 WEEKLY_MINUTES = 7 * 24 * 60
 
 
@@ -37,8 +38,13 @@ class RateLimitSnapshot:
     plan_type: str | None
     allowed: bool | None
     limit_reached: bool | None
-    weekly: LimitWindow
+    primary: LimitWindow
+    secondary: LimitWindow
     log_id: int | None
+
+    @property
+    def weekly(self) -> "LimitWindow":
+        return self.secondary
 
 
 @dataclass(frozen=True)
@@ -96,11 +102,13 @@ def _extract_rate_limits(data: object, now: datetime | None = None) -> RateLimit
         return None
 
     windows = [_limit_window("raw", rate_limits.get("primary")), _limit_window("raw", rate_limits.get("secondary"))]
-    weekly = _select_window("weekly", WEEKLY_MINUTES, windows, now)
+    primary = _select_window("5h", FIVE_HOUR_MINUTES, windows, now)
+    secondary = _select_window("weekly", WEEKLY_MINUTES, windows, now)
     log.debug(
-        "parsed rate limits updated_at=%s weekly=%s raw=%s",
+        "parsed rate limits updated_at=%s primary=%s secondary=%s raw=%s",
         _from_epoch(data.get("ts") or data.get("timestamp") or source.get("ts") or source.get("timestamp")),
-        weekly,
+        primary,
+        secondary,
         windows,
     )
     return RateLimitSnapshot(
@@ -108,7 +116,8 @@ def _extract_rate_limits(data: object, now: datetime | None = None) -> RateLimit
         plan_type=source.get("plan_type") or rate_limits.get("plan_type") or data.get("plan_type"),
         allowed=rate_limits.get("allowed"),
         limit_reached=rate_limits.get("limit_reached"),
-        weekly=weekly,
+        primary=primary,
+        secondary=secondary,
         log_id=None,
     )
 
@@ -203,7 +212,8 @@ def _load_rate_limits_from_sessions(sessions_dir: Path = SESSIONS_DIR) -> RateLi
         plan_type=None,
         allowed=None,
         limit_reached=None,
-        weekly=_limit_window("weekly", None),
+        primary=_limit_window("5h", None),
+        secondary=_limit_window("weekly", None),
         log_id=None,
     )
     if not sessions_dir.exists():
@@ -251,7 +261,8 @@ def load_rate_limits(log_db: Path = LOG_DB) -> RateLimitSnapshot:
         plan_type=None,
         allowed=None,
         limit_reached=None,
-        weekly=_limit_window("weekly", None),
+        primary=_limit_window("5h", None),
+        secondary=_limit_window("weekly", None),
         log_id=None,
     )
     if not log_db.exists():
@@ -285,7 +296,8 @@ def load_rate_limits(log_db: Path = LOG_DB) -> RateLimitSnapshot:
             plan_type=snapshot.plan_type,
             allowed=snapshot.allowed,
             limit_reached=snapshot.limit_reached,
-            weekly=snapshot.weekly,
+            primary=snapshot.primary,
+            secondary=snapshot.secondary,
             log_id=int(log_id),
         )
         if candidate.updated_at is None:
@@ -342,7 +354,8 @@ def load_usage() -> UsageSnapshot:
             plan_type=None,
             allowed=None,
             limit_reached=None,
-            weekly=_limit_window("weekly", None),
+            primary=_limit_window("5h", None),
+            secondary=_limit_window("weekly", None),
             log_id=None,
         )
         errors.append(f"rate limits: {exc}")
